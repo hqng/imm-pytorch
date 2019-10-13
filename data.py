@@ -1,0 +1,239 @@
+"""
+Load CelebA dataset.
+Perform proc_img_pair (crop,resize) and tps_warping
+"""
+import os
+from os import path
+import numpy as np
+from PIL import Image
+
+import torch
+from torch.nn import functional as F
+from torch.utils import data
+
+from torchvision import transforms as T
+
+from tps_sampler import TPSRandomSampler
+
+
+#------------------------------------------------------------------------------
+#Initial Dataset
+#------------------------------------------------------------------------------
+
+def load_dataset(data_root, dataset, subset):
+    image_dir = os.path.join(data_root, 'celeba', 'img_align_celeba')
+
+    with open(os.path.join(data_root, 'celeba', 'list_landmarks_align_celeba.txt'), 'r') as f:
+        lines = f.read().splitlines()
+    # skip header
+    lines = lines[2:]
+    image_files = []
+    keypoints = []
+    for line in lines:
+        image_files.append(line.split()[0])
+        keypoints.append([int(x) for x in line.split()[1:]])
+    keypoints = np.array(keypoints, dtype=np.float32)
+    assert image_files[0] == '000001.jpg'
+
+    # with open(os.path.join(data_root, 'MAFL', 'training.txt'), 'r') as f:
+    #     mafl_train = set(f.read().splitlines())
+    # mafl_train_overlap = []
+    # for i, image_file in enumerate(image_files):
+    #     if image_file in mafl_train:
+    #         mafl_train_overlap.append(i)
+
+    images_set = np.zeros(len(image_files), dtype=np.int32)
+
+    if dataset == 'celeba':
+        with open(os.path.join(data_root, 'celeba', 'list_eval_partition.txt'), 'r') as f:
+            celeba_set = [int(line.split()[1]) for line in f.readlines()]
+        images_set[:] = celeba_set
+        images_set += 1
+    # elif dataset == 'mafl':
+    #     images_set[mafl_train_overlap] = 1
+    # else:
+        # raise ValueError('Dataset = %s not recognized.' % dataset)
+
+    # set the test-set
+    # with open(os.path.join(data_root, 'MAFL', 'testing.txt'), 'r') as f:
+    #     mafl_test = set(f.read().splitlines())
+    # mafl_test_overlap = []
+    # for i, image_file in enumerate(image_files):
+    #     if image_file in mafl_test:
+    #         mafl_test_overlap.append(i)
+    # images_set[mafl_test_overlap] = 4
+
+    # put the last 10 percent of the MAFL training aside for validation
+    # (the part has no over with celeba training set)
+    # n_validation = int(round(0.1 * len(mafl_train_overlap)))
+    # mafl_validation = mafl_train_overlap[-n_validation:]
+    # images_set[mafl_validation] = 5
+
+    if dataset == 'celeba':
+        if subset == 'train':
+            label = 1
+        elif subset == 'val':
+            label = 2
+        else:
+            raise ValueError(
+                'subset = %s for celeba dataset not recognized.' % subset)
+    # elif dataset == 'mafl':
+    #     if subset == 'train':
+    #         label = 1
+    #     elif subset == 'test':
+    #         label = 4
+    #     elif subset == 'train10':
+    #         label = 5
+    #     else:
+    #         raise ValueError(
+    #             'subset = %s for mafl dataset not recognized.' % subset)
+
+    image_files = np.array(image_files)
+    images = image_files[images_set == label]
+    keypoints = keypoints[images_set == label]
+
+    # convert keypoints to
+    # [[lefteye_x, lefteye_y], [righteye_x, righteye_y], [nose_x, nose_y],
+    #  [leftmouth_x, leftmouth_y], [rightmouth_x, rightmouth_y]]
+    keypoints = np.reshape(keypoints, [-1, 5, 2])
+
+    return image_dir, images, keypoints
+
+
+class DatasetFromFolder(data.Dataset):
+    """Manipulate data from folder
+    """
+    def __init__(self, data_root, dataset, subset, transform):
+        super(DatasetFromFolder, self).__init__()
+        self.transform = transform
+        self.image_dir, self.image_name, self.keypoints = load_dataset(data_root, dataset, subset)
+
+    def __getitem__(self, idx):
+        img = Image.open(path.join(self.image_dir, self.image_name[idx]))
+        img = self.transform(img)
+        keypts = torch.from_numpy(self.keypoints[idx])
+        return img, keypts
+
+    def __len__(self):
+        return self.image_name.shape[0]
+
+
+def transforms():
+    return T.Compose([
+        T.ToTensor(),
+        T.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+    ])
+
+
+def get_dataset(data_root, dataset, subset):
+    return DatasetFromFolder(data_root, dataset, subset, transform=transforms())
+
+#------------------------------------------------------------------------------
+#Get method (used for DataLoader)
+#------------------------------------------------------------------------------
+
+class BatchTransform(object):
+    """ Preprocessing batch of pytorch tensors
+    """
+    def __init__(self, image_size=[128, 128], \
+            rotsd=[0.0, 5.0], scalesd=[0.0, 0.1], \
+            transsd=[0.1, 0.1], warpsd=[0.001, 0.005, 0.001, 0.01]):
+        self.image_size = image_size
+        self.target_sampler, self.source_sampler = self._create_tps(image_size, rotsd, scalesd, transsd, warpsd)
+
+    def exe(self, image, landmarks=None):
+        #call _proc_im_pair
+        image, future_image, mask, landmarks, future_landmarks = self._proc_im_pair(image, landmarks=landmarks)
+
+        #call _apply_tps
+        image, future_image, future_mask = self._apply_tps(image, mask)
+
+        return image, future_image, mask, future_mask, landmarks, future_landmarks
+
+    #TPS
+    def _create_tps(self, image_size, rotsd, scalesd, transsd, warpsd):
+        """create tps sampler for target and source images"""
+        target_sampler = TPSRandomSampler(
+            image_size[1], image_size[0], rotsd=rotsd[0],
+            scalesd=scalesd[0], transsd=transsd[0], warpsd=warpsd[:2], pad=False)
+        source_sampler = TPSRandomSampler(
+            image_size[1], image_size[0], rotsd=rotsd[1],
+            scalesd=scalesd[1], transsd=transsd[1], warpsd=warpsd[2:], pad=False)
+        return target_sampler, source_sampler
+
+    def _apply_tps(self, image, mask):
+        image = torch.cat([mask, image], dim=1)
+        # shape = image.shape
+
+        future_image = self.target_sampler.forward(image)
+        image = self.source_sampler.forward(future_image)
+
+        #reshape -- no need
+        # image = image.reshape(shape)
+        # future_image = future_image.reshape(shape)
+
+        future_mask = future_image[:, 0:1, ...]
+        future_image = future_image[:, 1:, ...]
+
+        mask = image[:, 0:1, ...]
+        image = image[:, 1:, ...]
+
+        return image, future_image, future_mask
+
+    #Process image pair
+    def _proc_im_pair(self, image, landmarks=None):
+        height, width = self.image_size[:2]
+
+        #crop image
+        crop_percent = 0.8
+        final_sz = self.image_size[0]
+        resize_sz = np.round(final_sz / crop_percent).astype(np.int32)
+        margin = np.round((resize_sz - final_sz) / 2.0).astype(np.int32)
+
+        if landmarks is not None:
+            original_sz = image.shape[-2:]
+            landmarks = self._resize_points(
+                landmarks, original_sz, [resize_sz, resize_sz])
+            landmarks -= margin
+
+        image = F.interpolate(image, \
+            size=[resize_sz, resize_sz], mode='bilinear', align_corners=True)
+
+        #take center crop
+        image = image[..., margin:margin + final_sz, margin:margin + final_sz]
+
+        mask = self._get_smooth_mask(height, width, 10, 20)[None] #unsqueeze dim=0
+
+        future_landmarks = landmarks
+        future_image = image
+
+        return image, future_image, mask, landmarks, future_landmarks
+
+    def _resize_points(self, points, size, new_size):
+        size = torch.tensor(size).float()
+        new_size = torch.tensor(new_size).float()
+        dtype = points.dtype
+        ratio = new_size / size
+        points = (points.float() * ratio[None]).type(dtype)
+        return points
+
+    def _get_smooth_step(self, n, b):
+        x = torch.linspace(-1, 1, n)
+        y = 0.5 + 0.5 * torch.tanh(x / b)
+        return y
+
+    def _get_smooth_mask(self, h, w, margin, step):
+        b = 0.4
+        step_up = self._get_smooth_step(step, b)
+        step_down = self._get_smooth_step(step, -b)
+        def create_strip(size):
+            return torch.cat(
+                [torch.zeros(margin),
+                step_up,
+                torch.ones(size - 2 * margin - 2 * step),
+                step_down,
+                torch.zeros(margin)], dim=0)
+        mask_x = create_strip(w)
+        mask_y = create_strip(h)
+        mask2d = mask_y[:, None] * mask_x[None]
+        return mask2d
