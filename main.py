@@ -1,5 +1,5 @@
 """
-Train and Evaluate Model
+Train Evaluate and Test Model
 """
 import argparse
 import time
@@ -21,65 +21,69 @@ from torchnet import meter
 from torchnet.logger import VisdomPlotLogger, VisdomSaver
 
 import data
-import imm_model as model
 from imm_model import AssembleNet
-from criterion import *
+from criterion import LossFunc
+import utils
 
-parser = argparse.ArgumentParser(description='Option for Glaucoma')
+PARSER = argparse.ArgumentParser(description='Option for Glaucoma')
 #------------------------------------------------------------------- data-option
-parser.add_argument('--data_root', type=str,
+PARSER.add_argument('--data_root', type=str,
                     default='../data/',
                     help='location of root dir')
-parser.add_argument('--dataset', type=str,
+PARSER.add_argument('--dataset', type=str,
                     default='celeba',
                     help='location of dataset')
-parser.add_argument('--testset', type=str,
+PARSER.add_argument('--testset', type=str,
                     default='../data/',
                     help='location of test data')
-parser.add_argument('--nthreads', type=int, default=8,
+PARSER.add_argument('--nthreads', type=int, default=8,
                     help='number of threads for data loader')
-parser.add_argument('--batch_size', type=int, default=8, metavar='N',
+PARSER.add_argument('--batch_size', type=int, default=8, metavar='N',
                     help='train batch size')
-parser.add_argument('--val_batch_size', type=int, default=8, metavar='N',
+PARSER.add_argument('--val_batch_size', type=int, default=8, metavar='N',
                     help='val batch size')
 #------------------------------------------------------------------ model-option
-parser.add_argument('--pretrained_model', type=str, default='',
+PARSER.add_argument('--pretrained_model', type=str, default='',
                     help='pretrain model location')
+PARSER.add_argument('--loss_type', type=str, default='perceptual',
+                    help='loss type for criterion: perceptual | l2')
 #--------------------------------------------------------------- training-option
-parser.add_argument('--seed', type=int, default=1234,
+PARSER.add_argument('--seed', type=int, default=1234,
                     help='random seed')
-parser.add_argument('--gpus', type=list, default=[2, 3],
+PARSER.add_argument('--gpus', type=list, default=[2, 3],
                     help='list of GPUs in use')
 #optimizer-option
-parser.add_argument('--optim_algor', type=str, default='Adam',
+PARSER.add_argument('--optim_algor', type=str, default='Adam',
                     help='optimization algorithm')
-parser.add_argument('--lr', type=float, default=1e-4,
+PARSER.add_argument('--lr', type=float, default=1e-4,
                     help='learning rate')
-parser.add_argument('--weight_decay', type=float, default=1e-8,
+PARSER.add_argument('--weight_decay', type=float, default=1e-8,
                     help='weight_decay rate')
 #saving-option
-parser.add_argument('--epochs', type=int, default=5000,
+PARSER.add_argument('--epochs', type=int, default=5000,
                     help='number of epochs')
-parser.add_argument('--checkpoint_interval', type=int, default=1,
+PARSER.add_argument('--checkpoint_interval', type=int, default=1,
                     help='epoch interval of saving checkpoint')
-parser.add_argument('--save_path', type=str, default='checkpoint',
+PARSER.add_argument('--save_path', type=str, default='checkpoint',
                     help='directory for saving checkpoint')
-parser.add_argument('--resume_checkpoint', type=str, default='',
+PARSER.add_argument('--resume_checkpoint', type=str, default='',
                     help='location of saved checkpoint')
 #only prediction-option
-parser.add_argument('--trained_model', type=str, default='',
+PARSER.add_argument('--trained_model', type=str, default='',
                     help='location of trained checkpoint')
 
-args = parser.parse_args()
+ARGS = PARSER.parse_args()
 
-device = torch.device('cuda:{}'.format(args.gpus[0]) if len(args.gpus) > 0 else 'cpu')
+DEVICE = torch.device('cuda:{}'.format(ARGS.gpus[0]) if len(ARGS.gpus) > 0 else 'cpu')
 # Set the random seed manually for reproducibility.
-torch.manual_seed(args.seed)
-if device.type == 'cuda':
-    cuda.set_device(args.gpus[0])
-    cuda.manual_seed(args.seed)
+torch.manual_seed(ARGS.seed)
+if DEVICE.type == 'cuda':
+    cuda.set_device(ARGS.gpus[0])
+    cuda.manual_seed(ARGS.seed)
 
-class Main:
+class Main():
+    """Wrap training and evaluating processes
+    """
     def __init__(self, opt):
         self.opt = opt
         os.makedirs(self.opt.save_path, exist_ok=True)
@@ -89,7 +93,7 @@ class Main:
         self.train_loader, self.val_loader = self._make_data(opt)
 
         #loss function
-        self.criterion = nn.MSELoss()
+        self.criterion = LossFunc(opt.loss_type)
 
         #batch data transform
         self.batch_transform = data.BatchTransform()
@@ -161,25 +165,19 @@ class Main:
 
         for _, batch in enumerate(dataloader):
             with torch.no_grad():
-                im = batch[0].requires_grad_(False).to(device)
-                keypts = batch[1].requires_grad_(False).to(device)
+                im = batch[0].requires_grad_(False).to(DEVICE)
+                keypts = batch[1].requires_grad_(False).to(DEVICE)
 
                 im, future_im, mask, _, _ = self.batch_transform.exe(im, landmarks=keypts)
 
                 future_im_pred, gauss_yx, pose_embeddings = self.neuralnet(im, future_im)
 
-                #vgg loss
+                #loss
+                loss = self.criterion(future_im_pred, future_im, mask)
 
                 #log meter
                 self.loss_meter.add(loss.item())
                 # self.score_meter.add(jaccscore.item())
-
-                # if epoch % 50 == 1 and iteration == 0:
-                #     shape = target.shape
-                #     predict = output.reshape(shape[0], shape[2], shape[3], shape[1]).max(dim=3)[1] #dim 3 now is classes
-                #     os.makedirs('valcheck', exist_ok=True)
-                #     fig_path = path.join('valcheck', 'fig_{}.png'.format(epoch))
-                #     savegrid(fig_path, input.cpu()[:, :1, :].numpy(), predict.cpu().numpy(), labels=label.cpu().numpy())
 
         self.neuralnet.train()
         return self.loss_meter.value()[0]
@@ -191,15 +189,15 @@ class Main:
         for iteration, batch in enumerate(dataloader, 1):
             start_time = time.time()
 
-            im = batch[0].requires_grad_(False).to(device)
-            keypts = batch[1].requires_grad_(False).to(device)
+            im = batch[0].requires_grad_(False).to(DEVICE)
+            keypts = batch[1].requires_grad_(False).to(DEVICE)
 
             im, future_im, mask, _, _ = self.batch_transform.exe(im, landmarks=keypts)
 
             future_im_pred, gauss_yx, pose_embeddings = self.neuralnet(im, future_im)
 
-            #vgg loss
-
+            #loss
+            loss = self.criterion(future_im_pred, future_im, mask)
 
             loss.backward()
             self.optimizer.step()
@@ -217,7 +215,7 @@ class Main:
 
         return self.loss_meter.value()[0]
 
-    def execute(self):
+    def exe(self):
         print(self.opt)
         print('\n')
         start_epoch = 1
@@ -246,8 +244,8 @@ class Main:
             #dim always is 0 because of input data always is in shape N*W
             self.neuralnet = nn.DataParallel(self.neuralnet, device_ids=self.opt.gpus, dim=0)
 
-        self.neuralnet.to(device)
-        self.vgg.to(device)
+        self.neuralnet.to(DEVICE)
+        self.criterion.to(DEVICE)
 
         #visualization
         port = 8097
@@ -262,7 +260,7 @@ class Main:
                 ['train_reconst', 'train_percept', 'val_reconst', 'val_percept']})
 
         print('Start training optim {}, on device {}'.format( \
-            self.opt.optim_algor, device.type))
+            self.opt.optim_algor, DEVICE.type))
 
         lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer, T_max=1000, eta_min=5e-5)
@@ -342,7 +340,9 @@ class Main:
 #Testing on specific images
 #------------------------------------------------------------------------------
 
-class Tester:
+class Tester():
+    """Testing trained model on test data.
+    """
     def test(self, opt, neuralnet, dataloader, source_sampler, target_sampler):
         """
         Segment on random image from dataset
@@ -354,8 +354,8 @@ class Tester:
         
         for iteration, batch in enumerate(dataloader):
             with torch.no_grad():
-                x = batch[0].requires_grad_(False).to(device)
-                # y = batch[1].requires_grad_(False).to(device)
+                x = batch[0].requires_grad_(False).to(DEVICE)
+                # y = batch[1].requires_grad_(False).to(DEVICE)
                 x_prime, _ = target_sampler.forward(x)
                 x, _ = source_sampler.forward(x)
 
@@ -368,28 +368,14 @@ class Tester:
 
                 os.makedirs('testcheck', exist_ok=True)
                 fig_path = path.join('testcheck', 'fig_{}.png'.format(iteration))
-                savegrid(fig_path, x_prime.cpu()[:, :1, :].numpy(), predict, gauss_mu=gauss_mu, name='deform')
-
-                # fig_path_seg = path.join('testcheck', 'figseg_{}.png'.format(iteration))
-                # savegrid(fig_path_seg, x.cpu()[:, :1, :].numpy(), seg, name='img')
-
-                # os.makedirs('submit', exist_ok=True)
-                # assert len(filenames) == predict.shape[0], '***ERROR: mismatch batch size***'
-                # predict = predict.permute(0, 2, 3, 1).cpu() #B*H*W*C
-                # for i in range(predict.shape[0]):
-                #     f_path = path.join('testcheck', '{}.npy'.format(filenames[i]))
-                #     f_data = predict[i].numpy().astype(np.uint8)
-                #     try:
-                #         np.save(f_path, f_data)
-                #     except:
-                #         print('*** ALERT: ERROR AT {} ***'.format(f_path))
+                utils.savegrid(fig_path, x_prime.cpu()[:, :1, :].numpy(), predict, gauss_mu=gauss_mu, name='deform')
 
                 idx += x.shape[0]
 
         neuralnet.train()
         return idx
 
-    def execute(self, opt):
+    def exe(self, opt):
         #Load trained model
         print(opt, '\n')
         print('Load checkpoint at {}'.format(opt.trained_model))
@@ -398,11 +384,6 @@ class Tester:
         checkpoint = torch.load(opt.trained_model, map_location=lambda storage, loc: storage, pickle_module=pickle)
         model_state = checkpoint['modelstate']
         neuralnet.load_state_dict(model_state)
-
-        source_sampler = TPSRandomSampler(height=224, width=224,\
-            rotsd=5., scalesd=0.1, warpsd=[0.001, 0.01], transsd=0.1, pad=False)
-        target_sampler = TPSRandomSampler(height=224, width=224,\
-            rotsd=0., scalesd=0., warpsd=[0.001, 0.005], transsd=0.1, pad=False)
 
         model_parameters = neuralnet.parameters() #filter(lambda p: p.requires_grad, neuralnet.parameters())
         n_params = sum([p.numel() for p in model_parameters])
@@ -416,70 +397,18 @@ class Tester:
         if len(opt.gpus) > 1:
             #dim always is 0 because of input data always is in shape N*W
             neuralnet = nn.DataParallel(neuralnet, device_ids=opt.gpus, dim=0)
-        neuralnet.to(device)
+        neuralnet.to(DEVICE)
 
-        print('Start testing on device {}'.format(device.type))
+        print('Start testing on device {}'.format(DEVICE.type))
         start_time = time.time()
         total_sample = self.test(opt, neuralnet, testLoader, source_sampler,target_sampler)
         print('| finish testing on {} samples in {} seconds'.format(total_sample, time.time() - start_time))
 
-def savegrid(fig_path, images, predictions, gauss_mu=None, labels=None, nrow=8, ncol=8, name='image'):
-    step = 2
-    ncol = 8
-    fig_width = 20
-    if labels is not None:
-        step = 3
-        ncol = 12
-        fig_width = 30
-    plt.rcParams['figure.figsize'] = (fig_width, 40)
-    j = 0
-    for i in range(0, nrow*ncol, step):
-        if j >= len(images):
-            break
-        img = images[j].squeeze()
-        plt.subplot(nrow, ncol, i+1)
-        plt.imshow(img) #,interpolation='none', cmap="nipy_spectral")
-        if gauss_mu is not None:
-            for k in range(gauss_mu[j].shape[0]):
-                y_jk = ((gauss_mu[j, k, 0]+1)*15*16).astype(np.int)
-                x_jk = ((gauss_mu[j, k, 1]+1)*11*16).astype(np.int)
-                plt.plot(x_jk, y_jk, 'bo')
-        plt.title('{}_{}'.format(name, j))
-        plt.axis('off')
-
-        pred = predictions[j].squeeze()
-        plt.subplot(nrow, ncol, i+2)
-        plt.imshow(pred)
-        plt.title('predict_{}'.format(j))
-        plt.axis('off')
-
-        if labels is not None:
-            label = labels[j]
-            plt.subplot(nrow, ncol, i+3)
-            plt.imshow(label)
-            plt.title('label_{}'.format(j))
-            plt.axis('off')
-
-        j += 1
-    # plt.show()
-    plt.savefig(fig_path, bbox_inches="tight", pad_inches=0)
-    plt.close()
-
-def transform_image(img):
-    " randomly transform input images"
-    #random vertical flip -- axis 1
-    # if np.random.uniform() > 0.5:
-        # img = torch.flip(img, dims=[2,])
-    #elastic transform
-    indices_x_clipped, indices_y_clipped = data.create_elastic_indices()
-    img[:, :, :, :] = img[:, :, indices_y_clipped, indices_x_clipped]
-    return img
-
 
 if __name__ == "__main__":
-    if opt.trained_model:
+    if ARGS.trained_model:
         tester = Tester()
-        tester.execute(opt)
+        tester.exe(ARGS)
     else:
-        main = Main(opt)
-        main.execute()
+        main = Main(ARGS)
+        main.exe()
