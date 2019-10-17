@@ -19,16 +19,16 @@ class LossFunc(nn.Module):
         return loss
 
     def _loss_mask(self, imap, mask):
-        mask = F.interpolate(mask.unsqueeze(dim=0), imap.shape[-2:]).squeeze(dim=0)
+        mask = F.interpolate(mask, imap.shape[-2:])
         return imap * mask
 
     def _loss(self, future_im_pred, future_im, mask=None):
         "loss function"
-
+        vgg_losses = []
         w_reconstruct = 1. / 255.
         if self.loss_type == 'perceptual':
             w_reconstruct = 1.
-            reconstruction_loss = self._colorization_reconstruction_loss(
+            reconstruction_loss, vgg_losses = self._colorization_reconstruction_loss(
                 future_im, future_im_pred, mask=mask)
         elif self.loss_type == 'l2':
             if mask is not None:
@@ -41,7 +41,7 @@ class LossFunc(nn.Module):
 
         loss = w_reconstruct * reconstruction_loss
 
-        return loss
+        return loss, vgg_losses
 
     def _colorization_reconstruction_loss(self, \
         gt_image, pred_image, mask=None, \
@@ -64,8 +64,9 @@ class LossFunc(nn.Module):
             l /= wl
             l = torch.mean(l)
             losses.append(l)
-        loss = torch.cat(losses, dim=0).sum()
-        return loss
+        vgg_losses = [x.item() for x in losses]
+        loss = torch.stack(losses).sum()
+        return loss, vgg_losses
 
     def _exp_running_avg(self, x, init_val=0., name='x'):
         with torch.no_grad():

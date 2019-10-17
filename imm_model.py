@@ -92,7 +92,7 @@ class Encoder(nn.Module):
     output: confidence maps"""
     def __init__(self, in_channels, n_filters, batch_norm=True, layer_norm=False):
         super(Encoder, self).__init__()
-        self.block_layers = []
+        self.block_layers = nn.ModuleList()
         conv1 = conv_block(in_channels, n_filters, kernel_size=7, stride=1, batch_norm=batch_norm, layer_norm=layer_norm)
         conv2 = conv_block(n_filters, n_filters, kernel_size=3, stride=1, batch_norm=batch_norm, layer_norm=layer_norm)
         self.block_layers.append(conv1)
@@ -100,10 +100,11 @@ class Encoder(nn.Module):
 
         for _ in range(3):
             filters = n_filters*2
-            conv_i0 = conv_block(filters, filters, kernel_size=3, stride=2, batch_norm=batch_norm, layer_norm=layer_norm)
+            conv_i0 = conv_block(n_filters, filters, kernel_size=3, stride=2, batch_norm=batch_norm, layer_norm=layer_norm)
             conv_i1 = conv_block(filters, filters, kernel_size=3, stride=1, batch_norm=batch_norm, layer_norm=layer_norm)
             self.block_layers.append(conv_i0)
             self.block_layers.append(conv_i1)
+            n_filters = filters
 
     def forward(self, x):
         block_features = []
@@ -155,7 +156,7 @@ class PoseEncoder(nn.Module):
         gauss_xy = []
         for shape_hw in self.map_sizes:
             gauss_xy_hw = \
-                get_gaussian_maps(gauss_mu, shape_hw, 1.0 / self.gauss_std, mode=self.gauss_mode)
+                get_gaussian_maps(gauss_mu, [shape_hw, shape_hw], 1.0 / self.gauss_std, mode=self.gauss_mode)
             gauss_xy.append(gauss_xy_hw)
 
         return gauss_mu, gauss_xy
@@ -176,6 +177,7 @@ class Renderer(nn.Module):
             if map_size[0] == n_final_res:
                 self.seq_renderers.add_module('conv_render_final', \
                     conv_block(n_filters, n_final_out, kernel_size=3, stride=1, batch_norm=False, activation=None))
+                break
             else:
                 self.seq_renderers.add_module('conv_render{}'.format(i+1), \
                     conv_block(n_filters, n_filters, kernel_size=3, stride=1, batch_norm=batch_norm))
@@ -210,7 +212,7 @@ class AssembleNet(nn.Module):
     def _create_render_sizes(self, max_size, min_size, renderer_stride):
         render_sizes = []
         size = max_size
-        while size > min_size:
+        while size >= min_size:
             render_sizes.append(size)
             size = max_size // renderer_stride
             max_size = size
@@ -224,6 +226,6 @@ class AssembleNet(nn.Module):
         joint_embedding = torch.cat((embeddings[-1], pose_embeddings[-1]), dim=1)
         future_im_pred = self.renderer(joint_embedding)
 
-        return future_im_pred, gauss_pt, pose_embeddings
+        return future_im_pred, gauss_pt, pose_embeddings[-1]
 
 

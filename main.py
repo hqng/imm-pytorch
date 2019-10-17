@@ -21,9 +21,10 @@ from torchnet import meter
 from torchnet.logger import VisdomPlotLogger, VisdomSaver
 
 import data
+import utils
 from imm_model import AssembleNet
 from criterion import LossFunc
-import utils
+
 
 PARSER = argparse.ArgumentParser(description='Option for Glaucoma')
 #------------------------------------------------------------------- data-option
@@ -38,9 +39,9 @@ PARSER.add_argument('--testset', type=str,
                     help='location of test data')
 PARSER.add_argument('--nthreads', type=int, default=8,
                     help='number of threads for data loader')
-PARSER.add_argument('--batch_size', type=int, default=8, metavar='N',
+PARSER.add_argument('--batch_size', type=int, default=32, metavar='N',
                     help='train batch size')
-PARSER.add_argument('--val_batch_size', type=int, default=8, metavar='N',
+PARSER.add_argument('--val_batch_size', type=int, default=32, metavar='N',
                     help='val batch size')
 #------------------------------------------------------------------ model-option
 PARSER.add_argument('--pretrained_model', type=str, default='',
@@ -50,7 +51,7 @@ PARSER.add_argument('--loss_type', type=str, default='perceptual',
 #--------------------------------------------------------------- training-option
 PARSER.add_argument('--seed', type=int, default=1234,
                     help='random seed')
-PARSER.add_argument('--gpus', type=list, default=[],
+PARSER.add_argument('--gpus', type=list, default=[1, 3],
                     help='list of GPUs in use')
 #optimizer-option
 PARSER.add_argument('--optim_algor', type=str, default='Adam',
@@ -168,12 +169,13 @@ class Main():
                 im = batch[0].requires_grad_(False).to(DEVICE)
                 keypts = batch[1].requires_grad_(False).to(DEVICE)
 
-                im, future_im, mask, _, _ = self.batch_transform.exe(im, landmarks=keypts)
+                deformed_batch = self.batch_transform.exe(im, landmarks=keypts)
+                im, future_im, mask = deformed_batch['image'], deformed_batch['future_image'], deformed_batch['mask']
 
-                future_im_pred, gauss_yx, pose_embeddings = self.neuralnet(im, future_im)
+                future_im_pred, _, _ = self.neuralnet(im, future_im)
 
                 #loss
-                loss = self.criterion(future_im_pred, future_im, mask)
+                loss, _ = self.criterion(future_im_pred, future_im, mask)
 
                 #log meter
                 self.loss_meter.add(loss.item())
@@ -192,12 +194,13 @@ class Main():
             im = batch[0].requires_grad_(False).to(DEVICE)
             keypts = batch[1].requires_grad_(False).to(DEVICE)
 
-            im, future_im, mask, _, _ = self.batch_transform.exe(im, landmarks=keypts)
+            deformed_batch = self.batch_transform.exe(im, landmarks=keypts)
+            im, future_im, mask = deformed_batch['image'], deformed_batch['future_image'], deformed_batch['mask']
 
-            future_im_pred, gauss_yx, pose_embeddings = self.neuralnet(im, future_im)
+            future_im_pred, _, _ = self.neuralnet(im, future_im)
 
             #loss
-            loss = self.criterion(future_im_pred, future_im, mask)
+            loss, loss_values = self.criterion(future_im_pred, future_im, mask)
 
             loss.backward()
             self.optimizer.step()
@@ -208,10 +211,8 @@ class Main():
 
             #print
             eslapsed = time.time() - start_time
-            print('| epoch {:3d} | {:3d}/{:3d} ith_batch | time(s) {:5.2f} | \
-                conten loss {:5.2f} | reconstruction loss {:5.2f}'.format( \
-                    epoch, iteration, len(dataloader), eslapsed, \
-                    content_loss.item(), reconstruction_loss.item()))
+            print('| epoch {:3d} | {:3d}/{:3d} ith_batch | time(s) {:5.2f} | \n loss {:5.2f} | vgg losses {} \n'.format( \
+                    epoch, iteration, len(dataloader), eslapsed, loss.item(), loss_values))
 
         return self.loss_meter.value()[0]
 
@@ -255,9 +256,9 @@ class Main():
         loss_logger = VisdomPlotLogger('line', port=port, \
             opts={'title': 'Total Loss', 'legend': ['train', 'val']})
 
-        losses_logger = VisdomPlotLogger('line', port=port, \
-            opts={'title': 'Losses', 'legend': \
-                ['train_reconst', 'train_percept', 'val_reconst', 'val_percept']})
+        # losses_logger = VisdomPlotLogger('line', port=port, \
+        #     opts={'title': 'Losses', 'legend': \
+        #         ['train_reconst', 'train_percept', 'val_reconst', 'val_percept']})
 
         print('Start training optim {}, on device {}'.format( \
             self.opt.optim_algor, DEVICE.type))
@@ -277,7 +278,7 @@ class Main():
             print(' **Training epoch {}, lr {}'.format(epoch, self.optimizer.param_groups[0]['lr']))
 
             start_time = time.time()
-            train_loss, train_reconst, train_percept = self._train(self.train_loader, epoch)
+            train_loss = self._train(self.train_loader, epoch)
 
             print('| finish training on epoch {:3d} | time(s) {:5.2f} | loss {:3.4f}'.format(
                 epoch, time.time() - start_time, train_loss))
@@ -285,7 +286,7 @@ class Main():
             print(' **Evaluating on validate set')
 
             start_time = time.time()
-            val_loss, val_reconst, val_percept = self._evaluate(self.val_loader)
+            val_loss = self._evaluate(self.val_loader)
 
             print('| finish validating on epoch {:3d} | time(s) {:5.2f} | loss {:3.4f}'.format(
                 epoch, time.time() - start_time, val_loss))
@@ -328,7 +329,7 @@ class Main():
 
             #visualize training and eval process
             loss_logger.log((epoch, epoch), (train_loss, val_loss))
-            losses_logger.log((epoch, epoch, epoch, epoch), (train_reconst, train_percept, val_reconst, val_percept))
+            # losses_logger.log((epoch, epoch, epoch, epoch), (train_reconst, train_percept, val_reconst, val_percept))
 
             visdom_saver.save()
 
@@ -343,7 +344,7 @@ class Main():
 class Tester():
     """Testing trained model on test data.
     """
-    def test(self, opt, neuralnet, dataloader, source_sampler, target_sampler):
+    def test(self, opt, neuralnet, dataloader, batch_transform):
         """
         Segment on random image from dataset
         Support 2D images only
@@ -351,24 +352,25 @@ class Tester():
 
         neuralnet.eval()
         idx = 0
-        
+
         for iteration, batch in enumerate(dataloader):
             with torch.no_grad():
-                x = batch[0].requires_grad_(False).to(DEVICE)
-                # y = batch[1].requires_grad_(False).to(DEVICE)
-                x_prime, _ = target_sampler.forward(x)
-                x, _ = source_sampler.forward(x)
+                im = batch[0].requires_grad_(False).to(DEVICE)
+                keypts = batch[1].requires_grad_(False).to(DEVICE)
 
-                output, _, gauss_mu = neuralnet(x, x_prime)
+                deformed_batch = batch_transform.exe(im, landmarks=keypts)
+                im, future_im, mask = deformed_batch['image'], deformed_batch['future_image'], deformed_batch['mask']
 
-                predict = output.detach().cpu().numpy()
+                future_im_pred, gauss_mu, _ = neuralnet(im, future_im)
+
+                predict = future_im_pred.detach().cpu().numpy()
                 gauss_mu = gauss_mu.detach().cpu().numpy()
                 # gauss_map = gauss_map.detach().cpu().numpy()
                 # seg = seg.max(dim=1)[1].detach().cpu().numpy()
 
                 os.makedirs('testcheck', exist_ok=True)
                 fig_path = path.join('testcheck', 'fig_{}.png'.format(iteration))
-                utils.savegrid(fig_path, x_prime.cpu()[:, :1, :].numpy(), predict, gauss_mu=gauss_mu, name='deform')
+                utils.savegrid(fig_path, future_im.cpu()[:, :1, :].numpy(), predict, gauss_mu=gauss_mu, name='deform')
 
                 idx += x.shape[0]
 
@@ -390,8 +392,10 @@ class Tester():
         print('number of params', n_params)
 
         #Dataloader
-        testset = data.get_valset(opt.valset) #data.get_testset(opt.testset)
-        testLoader = DataLoader(dataset=testset, num_workers=opt.nthreads, batch_size=opt.val_batch_size, shuffle=False)
+        testset = data.get_dataset(opt.testset, opt.dataset, subset='val')
+        test_loader = DataLoader(dataset=testset, num_workers=opt.nthreads, batch_size=opt.val_batch_size, shuffle=False)
+
+        batch_transform = data.BatchTransform()
 
         #DataParallel for multiple GPUs:
         if len(opt.gpus) > 1:
@@ -401,7 +405,7 @@ class Tester():
 
         print('Start testing on device {}'.format(DEVICE.type))
         start_time = time.time()
-        total_sample = self.test(opt, neuralnet, testLoader, source_sampler,target_sampler)
+        total_sample = self.test(opt, neuralnet, test_loader, batch_transform)
         print('| finish testing on {} samples in {} seconds'.format(total_sample, time.time() - start_time))
 
 
