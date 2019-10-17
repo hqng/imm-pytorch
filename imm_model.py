@@ -213,6 +213,7 @@ class AssembleNet(nn.Module):
         while size > min_size:
             render_sizes.append(size)
             size = max_size // renderer_stride
+            max_size = size
         return render_sizes
 
     def forward(self, im, future_im):

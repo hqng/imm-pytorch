@@ -50,7 +50,7 @@ PARSER.add_argument('--loss_type', type=str, default='perceptual',
 #--------------------------------------------------------------- training-option
 PARSER.add_argument('--seed', type=int, default=1234,
                     help='random seed')
-PARSER.add_argument('--gpus', type=list, default=[2, 3],
+PARSER.add_argument('--gpus', type=list, default=[],
                     help='list of GPUs in use')
 #optimizer-option
 PARSER.add_argument('--optim_algor', type=str, default='Adam',
