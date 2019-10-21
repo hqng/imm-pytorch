@@ -71,6 +71,7 @@ class TPSRandomSampler(nn.Module):
 
 
     def forward(self, input):
+        m, M = input.min(), input.max()
         with torch.no_grad():
             # get TPS grids
             batch_size = input.shape[0]
@@ -83,7 +84,7 @@ class TPSRandomSampler(nn.Module):
             input = F.pad(input, (-self.h_pad, -self.h_pad, \
                 -self.w_pad, -self.w_pad))
 
-            return input
+            return torch.clamp(input, m, M)
 
     def forward_py(self, input):
         input = torch.from_numpy(input).float()

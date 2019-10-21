@@ -1,3 +1,4 @@
+import numpy as np
 import matplotlib.pyplot as plt
 
 def savegrid(fig_path, images, predictions, \
@@ -14,18 +15,18 @@ def savegrid(fig_path, images, predictions, \
     for i in range(0, nrow*ncol, step):
         if j >= len(images):
             break
-        img = images[j].squeeze()
+        img = images[j]
         plt.subplot(nrow, ncol, i+1)
         plt.imshow(img) #,interpolation='none', cmap="nipy_spectral")
         if gauss_mu is not None:
             for k in range(gauss_mu[j].shape[0]):
-                y_jk = ((gauss_mu[j, k, 0]+1)*15*16).astype(np.int)
-                x_jk = ((gauss_mu[j, k, 1]+1)*11*16).astype(np.int)
+                y_jk = ((gauss_mu[j, k, 0]+1)*64).astype(np.int)
+                x_jk = ((gauss_mu[j, k, 1]+1)*64).astype(np.int)
                 plt.plot(x_jk, y_jk, 'bo')
         plt.title('{}_{}'.format(name, j))
         plt.axis('off')
 
-        pred = predictions[j].squeeze()
+        pred = predictions[j]
         plt.subplot(nrow, ncol, i+2)
         plt.imshow(pred)
         plt.title('predict_{}'.format(j))

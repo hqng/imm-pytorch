@@ -39,9 +39,9 @@ PARSER.add_argument('--testset', type=str,
                     help='location of test data')
 PARSER.add_argument('--nthreads', type=int, default=8,
                     help='number of threads for data loader')
-PARSER.add_argument('--batch_size', type=int, default=32, metavar='N',
+PARSER.add_argument('--batch_size', type=int, default=96, metavar='N',
                     help='train batch size')
-PARSER.add_argument('--val_batch_size', type=int, default=32, metavar='N',
+PARSER.add_argument('--val_batch_size', type=int, default=96, metavar='N',
                     help='val batch size')
 #------------------------------------------------------------------ model-option
 PARSER.add_argument('--pretrained_model', type=str, default='',
@@ -56,7 +56,7 @@ PARSER.add_argument('--gpus', type=list, default=[1, 3],
 #optimizer-option
 PARSER.add_argument('--optim_algor', type=str, default='Adam',
                     help='optimization algorithm')
-PARSER.add_argument('--lr', type=float, default=1e-4,
+PARSER.add_argument('--lr', type=float, default=1e-3,
                     help='learning rate')
 PARSER.add_argument('--weight_decay', type=float, default=1e-8,
                     help='weight_decay rate')
@@ -175,7 +175,7 @@ class Main():
                 future_im_pred, _, _ = self.neuralnet(im, future_im)
 
                 #loss
-                loss, _ = self.criterion(future_im_pred, future_im, mask)
+                loss, _ = self.criterion(future_im_pred, future_im)
 
                 #log meter
                 self.loss_meter.add(loss.item())
@@ -200,7 +200,7 @@ class Main():
             future_im_pred, _, _ = self.neuralnet(im, future_im)
 
             #loss
-            loss, loss_values = self.criterion(future_im_pred, future_im, mask)
+            loss, loss_values = self.criterion(future_im_pred, future_im)
 
             loss.backward()
             self.optimizer.step()
@@ -363,16 +363,16 @@ class Tester():
 
                 future_im_pred, gauss_mu, _ = neuralnet(im, future_im)
 
-                predict = future_im_pred.detach().cpu().numpy()
+                predict = future_im_pred.detach().cpu().numpy().transpose(0, 2, 3, 1)
                 gauss_mu = gauss_mu.detach().cpu().numpy()
                 # gauss_map = gauss_map.detach().cpu().numpy()
                 # seg = seg.max(dim=1)[1].detach().cpu().numpy()
 
                 os.makedirs('testcheck', exist_ok=True)
                 fig_path = path.join('testcheck', 'fig_{}.png'.format(iteration))
-                utils.savegrid(fig_path, future_im.cpu()[:, :1, :].numpy(), predict, gauss_mu=gauss_mu, name='deform')
+                utils.savegrid(fig_path, future_im.cpu().numpy().transpose(0, 2, 3, 1), predict, gauss_mu=gauss_mu, name='deform')
 
-                idx += x.shape[0]
+                idx += im.shape[0]
 
         neuralnet.train()
         return idx

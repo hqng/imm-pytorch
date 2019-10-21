@@ -12,7 +12,7 @@ class LossFunc(nn.Module):
         super(LossFunc, self).__init__()
         self.loss_type = loss_type
         self.ema = EMA()
-        self.vggnet = Vgg16()
+        self.vggnet = Vgg16() if loss_type == 'perceptual' else None
 
     def forward(self, future_im_pred, future_im, mask=None):
         loss = self._loss(future_im_pred, future_im, mask=mask)
