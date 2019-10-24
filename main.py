@@ -2,10 +2,8 @@
 Train Evaluate and Test Model
 """
 
-import numpy as np
 import os, argparse, gc, glob, time, pickle
 from os import path
-from matplotlib import pyplot as plt
 
 import torch
 from torch import nn, optim, cuda
@@ -191,6 +189,8 @@ class Main():
             deformed_batch = self.batch_transform.exe(im, landmarks=keypts)
             im, future_im, mask = deformed_batch['image'], deformed_batch['future_image'], deformed_batch['mask']
 
+            #zero gradient first,then forward
+            self.optimizer.zero_grad()
             future_im_pred, _, _ = self.neuralnet(im, future_im)
 
             #loss
@@ -338,7 +338,7 @@ class Main():
 class Tester():
     """Testing trained model on test data.
     """
-    def test(self, opt, neuralnet, dataloader, batch_transform):
+    def test(self, neuralnet, dataloader, batch_transform):
         """
         Segment on random image from dataset
         Support 2D images only
@@ -399,7 +399,7 @@ class Tester():
 
         print('Start testing on device {}'.format(DEVICE.type))
         start_time = time.time()
-        total_sample = self.test(opt, neuralnet, test_loader, batch_transform)
+        total_sample = self.test(neuralnet, test_loader, batch_transform)
         print('| finish testing on {} samples in {} seconds'.format(total_sample, time.time() - start_time))
 
 

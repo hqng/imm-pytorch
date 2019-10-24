@@ -153,7 +153,7 @@ class BatchTransform(object):
 
     #Process image pair
     def _proc_im_pair(self, image, landmarks=None):
-        Min, Max = image.min(), image.max()
+        m, M = image.min(), image.max()
 
         height, width = self.image_size[:2]
 
@@ -174,7 +174,7 @@ class BatchTransform(object):
 
         #take center crop
         image = image[..., margin:margin + final_sz, margin:margin + final_sz]
-        image = torch.clamp(image, Min, Max)
+        image = torch.clamp(image, m, M)
 
         mask = self._get_smooth_mask(height, width, 10, 20) #shape HxW
         mask = mask.to(image.device)
