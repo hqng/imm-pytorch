@@ -6,7 +6,16 @@ http://www.robots.ox.ac.uk/~vgg/research/unsupervised_landmarks/unsupervised_lan
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from torch.nn import init
+from torch.nn import functional as F
+
+
+def _init_weight(modules):
+    for m in modules:
+        if isinstance(m, (nn.Conv2d, nn.Conv3d)):
+            init.xavier_uniform_(m.weight)
+            if m.bias is not None:
+                init.constant_(m.bias, 0)
 
 
 def get_coord(x, other_axis, axis_size):
@@ -17,6 +26,7 @@ def get_coord(x, other_axis, axis_size):
     coord_pt = coord_pt.view(1, 1, axis_size) # 1,1,W
     g_c = torch.sum(g_c_prob * coord_pt, dim=2) # B,NMAP
     return g_c, g_c_prob
+
 
 def get_gaussian_maps(mu, shape_hw, inv_std, mode='rot'):
     """
@@ -192,6 +202,7 @@ class Renderer(nn.Module):
 
     def forward(self, x):
         x = self.seq_renderers(x)
+        x = F.sigmoid(x)
         return x
 
 class AssembleNet(nn.Module):
@@ -208,6 +219,8 @@ class AssembleNet(nn.Module):
         self.image_encoder = ImageEncoder(in_channels, n_filters)
         self.pose_encoder = PoseEncoder(in_channels, n_filters, n_maps, map_sizes=self.render_sizes)
         self.renderer = Renderer(min_size, self.map_filters, n_render_filters, n_final_out, n_final_res=max_size[0])
+
+        _init_weight(self.modules())
 
     def _create_render_sizes(self, max_size, min_size, renderer_stride):
         render_sizes = []

@@ -1,20 +1,14 @@
 """
 Train Evaluate and Test Model
 """
-import argparse
-import time
-import os
-from os import path
-import gc
-import glob
-import pickle
+
 import numpy as np
-import matplotlib.pyplot as plt
+import os, argparse, gc, glob, time, pickle
+from os import path
+from matplotlib import pyplot as plt
 
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch import cuda
+from torch import nn, optim, cuda
 from torch.utils.data import DataLoader
 from visdom import Visdom
 from torchnet import meter
@@ -191,8 +185,8 @@ class Main():
         for iteration, batch in enumerate(dataloader, 1):
             start_time = time.time()
 
-            im = batch[0].requires_grad_(False).to(DEVICE)
-            keypts = batch[1].requires_grad_(False).to(DEVICE)
+            im = batch[0].to(DEVICE)
+            keypts = batch[1].to(DEVICE)
 
             deformed_batch = self.batch_transform.exe(im, landmarks=keypts)
             im, future_im, mask = deformed_batch['image'], deformed_batch['future_image'], deformed_batch['mask']

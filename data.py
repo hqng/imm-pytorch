@@ -34,13 +34,6 @@ def load_dataset(data_root, dataset, subset):
     keypoints = np.array(keypoints, dtype=np.float32)
     assert image_files[0] == '000001.jpg'
 
-    # with open(os.path.join(data_root, 'MAFL', 'training.txt'), 'r') as f:
-    #     mafl_train = set(f.read().splitlines())
-    # mafl_train_overlap = []
-    # for i, image_file in enumerate(image_files):
-    #     if image_file in mafl_train:
-    #         mafl_train_overlap.append(i)
-
     images_set = np.zeros(len(image_files), dtype=np.int32)
 
     if dataset == 'celeba':
@@ -48,25 +41,6 @@ def load_dataset(data_root, dataset, subset):
             celeba_set = [int(line.split()[1]) for line in f.readlines()]
         images_set[:] = celeba_set
         images_set += 1
-    # elif dataset == 'mafl':
-    #     images_set[mafl_train_overlap] = 1
-    # else:
-        # raise ValueError('Dataset = %s not recognized.' % dataset)
-
-    # set the test-set
-    # with open(os.path.join(data_root, 'MAFL', 'testing.txt'), 'r') as f:
-    #     mafl_test = set(f.read().splitlines())
-    # mafl_test_overlap = []
-    # for i, image_file in enumerate(image_files):
-    #     if image_file in mafl_test:
-    #         mafl_test_overlap.append(i)
-    # images_set[mafl_test_overlap] = 4
-
-    # put the last 10 percent of the MAFL training aside for validation
-    # (the part has no over with celeba training set)
-    # n_validation = int(round(0.1 * len(mafl_train_overlap)))
-    # mafl_validation = mafl_train_overlap[-n_validation:]
-    # images_set[mafl_validation] = 5
 
     if dataset == 'celeba':
         if subset == 'train':
@@ -76,16 +50,6 @@ def load_dataset(data_root, dataset, subset):
         else:
             raise ValueError(
                 'subset = %s for celeba dataset not recognized.' % subset)
-    # elif dataset == 'mafl':
-    #     if subset == 'train':
-    #         label = 1
-    #     elif subset == 'test':
-    #         label = 4
-    #     elif subset == 'train10':
-    #         label = 5
-    #     else:
-    #         raise ValueError(
-    #             'subset = %s for mafl dataset not recognized.' % subset)
 
     image_files = np.array(image_files)
     images = image_files[images_set == label]
@@ -120,10 +84,10 @@ class DatasetFromFolder(data.Dataset):
         return self.image_name.shape[0]
 
 
-def transforms():
+def transforms(size=[128, 128]):
     return T.Compose([
+        # T.Resize(size),
         T.ToTensor(),
-        T.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
     ])
 
 
@@ -141,7 +105,8 @@ class BatchTransform(object):
             rotsd=[0.0, 5.0], scalesd=[0.0, 0.1], \
             transsd=[0.1, 0.1], warpsd=[0.001, 0.005, 0.001, 0.01]):
         self.image_size = image_size
-        self.target_sampler, self.source_sampler = self._create_tps(image_size, rotsd, scalesd, transsd, warpsd)
+        self.target_sampler, self.source_sampler = \
+            self._create_tps(image_size, rotsd, scalesd, transsd, warpsd)
 
     def exe(self, image, landmarks=None):
         #call _proc_im_pair
@@ -188,6 +153,8 @@ class BatchTransform(object):
 
     #Process image pair
     def _proc_im_pair(self, image, landmarks=None):
+        Min, Max = image.min(), image.max()
+
         height, width = self.image_size[:2]
 
         #crop image
@@ -207,16 +174,17 @@ class BatchTransform(object):
 
         #take center crop
         image = image[..., margin:margin + final_sz, margin:margin + final_sz]
+        image = torch.clamp(image, Min, Max)
 
         mask = self._get_smooth_mask(height, width, 10, 20) #shape HxW
         mask = mask.to(image.device)
 
         future_landmarks = landmarks
-        future_image = image
+        # future_image = image.clone()
 
         batch = {}
-        batch.update({'image': image, 'future_image': future_image, \
-            'mask': mask, 'landmarks': landmarks, 'future_landmarks': future_landmarks})
+        batch.update({'image': image, 'mask': mask, \
+            'landmarks': landmarks, 'future_landmarks': future_landmarks})
 
         return batch
 

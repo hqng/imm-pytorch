@@ -50,12 +50,16 @@ class LossFunc(nn.Module):
         ws = [100.0, 1.6, 2.3, 1.8, 2.8, 100.0]
 
         #get features map from vgg
-        feats = self.vggnet(torch.cat((gt_image, pred_image), dim=0))
-        feats = [getattr(feats, k) for k in names]
-        feat_gt, feat_pred = zip(*[torch.chunk(f, 2, dim=0) for f in feats])
+        feats_gt = self.vggnet(gt_image)
+        feats_pred = self.vggnet(pred_image)
+
+        feat_gt, feat_pred = [gt_image], [pred_image]
+        for k in names[1:]: #no need input
+            feat_gt.append(getattr(feats_gt, k))
+            feat_pred.append(getattr(feats_pred, k))
 
         losses = []
-        for k in range(len(feats)):
+        for k, _ in enumerate(names):
             l = F.mse_loss(feat_pred[k], feat_gt[k], reduction='none')
             if mask is not None:
                 l = self._loss_mask(l, mask)
@@ -64,7 +68,7 @@ class LossFunc(nn.Module):
             l /= wl
             l = torch.mean(l)
             losses.append(l)
-        vgg_losses = [x.item() for x in losses]
+        vgg_losses = [x.item() for x in losses] #for display
         loss = torch.stack(losses).sum()
         return loss, vgg_losses
 
@@ -83,7 +87,7 @@ class EMA(object):
 
     def register(self, name, val):
         "add val to shadow by key=name"
-        self.avgs[name] = val
+        self.avgs.update({name: val})
 
     def get(self, name):
         "get value with key=name"

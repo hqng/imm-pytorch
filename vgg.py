@@ -6,7 +6,7 @@ from torchvision import models
 
 class Vgg16(torch.nn.Module):
     def __init__(self, requires_grad=False,
-        names=['input', 'conv1_2', 'conv2_2', 'conv3_2', 'conv4_2', 'conv5_2']):
+        names=['conv1_2', 'conv2_2', 'conv3_2', 'conv4_2', 'conv5_2']):
         super(Vgg16, self).__init__()
         self.names = names
         vgg_pretrained_features = models.vgg16(pretrained=True).features
@@ -31,5 +31,5 @@ class Vgg16(torch.nn.Module):
         h = self.slice5(h)
         h_relu5_2 = h
         vgg_outputs = namedtuple("VggOutputs", self.names)
-        out = vgg_outputs(X, h_conv1_2, h_conv2_2, h_relu3_2, h_relu4_2, h_relu5_2)
+        out = vgg_outputs(h_conv1_2, h_conv2_2, h_relu3_2, h_relu4_2, h_relu5_2)
         return out

@@ -100,78 +100,78 @@ class TPSRandomSampler(nn.Module):
 
 class TPSGridGen(nn.Module):
 
-  def __init__(self, Ho, Wo, Hc, Wc):
-    """
-    Ho,Wo: height/width of the output tensor (grid dimensions).
-    Hc,Wc: height/width of the control-point grid.
+    def __init__(self, Ho, Wo, Hc, Wc):
+        """
+        Ho,Wo: height/width of the output tensor (grid dimensions).
+        Hc,Wc: height/width of the control-point grid.
 
-    Assumes for simplicity that the control points lie on a regular grid.
-    Can be made more general.
-    """
-    super(TPSGridGen, self).__init__()
+        Assumes for simplicity that the control points lie on a regular grid.
+        Can be made more general.
+        """
+        super(TPSGridGen, self).__init__()
 
-    self._grid_hw = (Ho, Wo)
-    self._cp_hw = (Hc, Wc)
+        self._grid_hw = (Ho, Wo)
+        self._cp_hw = (Hc, Wc)
 
-    # initialize the grid:
-    xx, yy = np.meshgrid(np.linspace(-1, 1, Wo), np.linspace(-1, 1, Ho))
-    self._grid = np.c_[xx.flatten(), yy.flatten()].astype(np.float32)  # Nx2
-    self._n_grid = self._grid.shape[0]
+        # initialize the grid:
+        xx, yy = np.meshgrid(np.linspace(-1, 1, Wo), np.linspace(-1, 1, Ho))
+        self._grid = np.c_[xx.flatten(), yy.flatten()].astype(np.float32)  # Nx2
+        self._n_grid = self._grid.shape[0]
 
-    # initialize the control points:
-    xx, yy = np.meshgrid(np.linspace(-1, 1, Wc), np.linspace(-1, 1, Hc))
-    self._control_pts = np.c_[xx.flatten(), yy.flatten()].astype(np.float32)  # Mx2
-    self._n_cp = self._control_pts.shape[0]
+        # initialize the control points:
+        xx, yy = np.meshgrid(np.linspace(-1, 1, Wc), np.linspace(-1, 1, Hc))
+        self._control_pts = np.c_[xx.flatten(), yy.flatten()].astype(np.float32)  # Mx2
+        self._n_cp = self._control_pts.shape[0]
 
-    # compute the pair-wise distances b/w control-points and grid-points:
-    Dx = ssd.cdist(self._grid, self._control_pts, metric='sqeuclidean')  # NxM
+        # compute the pair-wise distances b/w control-points and grid-points:
+        Dx = ssd.cdist(self._grid, self._control_pts, metric='sqeuclidean')  # NxM
 
-    # create the tps kernel:
-    # real_min = 100 * np.finfo(np.float32).min
-    real_min = 1e-8
-    Dx = np.clip(Dx, real_min, None)  # avoid log(0)
-    Kp = np.log(Dx) * Dx
-    Os = np.ones((self._grid.shape[0]))
-    L = np.c_[Kp, np.ones((self._n_grid, 1), dtype=np.float32),
-              self._grid]  # Nx(M+3)
-    self._L = torch.from_numpy(L.astype(np.float32))  # Nx(M+3)
+        # create the tps kernel:
+        # real_min = 100 * np.finfo(np.float32).min
+        real_min = 1e-8
+        Dx = np.clip(Dx, real_min, None)  # avoid log(0)
+        Kp = np.log(Dx) * Dx
+        Os = np.ones((self._grid.shape[0]))
+        L = np.c_[Kp, np.ones((self._n_grid, 1), dtype=np.float32),
+                self._grid]  # Nx(M+3)
+        self._L = torch.from_numpy(L.astype(np.float32))  # Nx(M+3)
 
 
-  def forward(self, w_tps):
-    """
-    W_TPS: Bx(M+3)x2 sized tensor of tps-transformation params.
-            here `M` is the number of control-points.
-                `B` is the batch-size.
+    def forward(self, w_tps):
+        """
+        W_TPS: Bx(M+3)x2 sized tensor of tps-transformation params.
+                here `M` is the number of control-points.
+                    `B` is the batch-size.
 
-    Returns an BxHoxWox2 tensor of grid coordinates.
-    """
-    assert w_tps.shape[1] - 3 == self._n_cp
-    batch_size = w_tps.shape[0]
-    tfm_grid = torch.matmul(self._L, w_tps)
-    tfm_grid = tfm_grid.reshape(
-        (batch_size, self._grid_hw[0], self._grid_hw[1], 2))
-    return tfm_grid
+        Returns an BxHoxWox2 tensor of grid coordinates.
+        """
+        assert w_tps.shape[1] - 3 == self._n_cp
+        batch_size = w_tps.shape[0]
+        tfm_grid = torch.matmul(self._L, w_tps)
+        tfm_grid = tfm_grid.reshape(
+            (batch_size, self._grid_hw[0], self._grid_hw[1], 2))
+        return tfm_grid
 
 
 def sample_tps_w(Hc, Wc, warpsd, rotsd, scalesd, transsd):
-  """
-  Returns randomly sampled TPS-grid params of size (Hc*Wc+3)x2.
+    """
+    Returns randomly sampled TPS-grid params of size (Hc*Wc+3)x2.
 
-  Params:
-    WARPSD: 2-tuple
-    {ROT/SCALE/TRANS}-SD: 1-tuple of standard devs.
-  """
-  Nc = Hc * Wc  # no of control-pots
-  # non-linear component:
-  mask = (np.random.rand(Nc, 2) > 0.5).astype(np.float32)
-  W = warpsd[0] * np.random.randn(Nc, 2) + \
-      warpsd[1] * (mask * np.random.randn(Nc, 2))
-  # affine component:
-  rnd = np.random.randn
-  rot = np.deg2rad(rnd() * rotsd)
-  sc = 1.0 + rnd() * scalesd
-  aff = [[transsd*rnd(),      transsd*rnd()],
-         [sc * np.cos(rot),   sc * -np.sin(rot)],
-         [sc * np.sin(rot),   sc * np.cos(rot)]]
-  W = np.r_[W, aff]
-  return W
+    Params:
+        WARPSD: 2-tuple
+        {ROT/SCALE/TRANS}-SD: 1-tuple of standard devs.
+    """
+    Nc = Hc * Wc  # no of control-pots
+    # non-linear component:
+    mask = (np.random.rand(Nc, 2) > 0.5).astype(np.float32)
+    W = warpsd[0] * np.random.randn(Nc, 2) + \
+        warpsd[1] * (mask * np.random.randn(Nc, 2))
+    # affine component:
+    rnd = np.random.randn
+    rot = np.deg2rad(rnd() * rotsd)
+    sc = 1.0 + rnd() * scalesd
+    aff = [[transsd*rnd(), transsd*rnd()],
+            [sc * np.cos(rot), sc * -np.sin(rot)],
+            [sc * np.sin(rot), sc * np.cos(rot)]]
+    W = np.r_[W, aff]
+    return W
