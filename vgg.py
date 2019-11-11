@@ -5,8 +5,8 @@ from torchvision import models
 
 
 class Vgg16(torch.nn.Module):
-    def __init__(self, requires_grad=False,
-        names=['conv1_2', 'conv2_2', 'conv3_2', 'conv4_2', 'conv5_2']):
+    def __init__(self, requires_grad=False, \
+            names=['conv1_2', 'conv2_2', 'conv3_2', 'conv4_2', 'conv5_2']):
         super(Vgg16, self).__init__()
         self.names = names
         vgg_pretrained_features = models.vgg16(pretrained=True).features

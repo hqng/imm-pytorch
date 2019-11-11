@@ -18,7 +18,7 @@ from imm_model import AssembleNet
 from criterion import LossFunc
 
 
-PARSER = argparse.ArgumentParser(description='Option for Glaucoma')
+PARSER = argparse.ArgumentParser(description='Option for Conditional Image Generating')
 #------------------------------------------------------------------- data-option
 PARSER.add_argument('--data_root', type=str,
                     default='../data/',
@@ -31,9 +31,9 @@ PARSER.add_argument('--testset', type=str,
                     help='location of test data')
 PARSER.add_argument('--nthreads', type=int, default=8,
                     help='number of threads for data loader')
-PARSER.add_argument('--batch_size', type=int, default=96, metavar='N',
+PARSER.add_argument('--batch_size', type=int, default=64, metavar='N',
                     help='train batch size')
-PARSER.add_argument('--val_batch_size', type=int, default=96, metavar='N',
+PARSER.add_argument('--val_batch_size', type=int, default=64, metavar='N',
                     help='val batch size')
 #------------------------------------------------------------------ model-option
 PARSER.add_argument('--pretrained_model', type=str, default='',
@@ -43,7 +43,7 @@ PARSER.add_argument('--loss_type', type=str, default='perceptual',
 #--------------------------------------------------------------- training-option
 PARSER.add_argument('--seed', type=int, default=1234,
                     help='random seed')
-PARSER.add_argument('--gpus', type=list, default=[1, 3],
+PARSER.add_argument('--gpus', type=list, default=[3],
                     help='list of GPUs in use')
 #optimizer-option
 PARSER.add_argument('--optim_algor', type=str, default='Adam',
@@ -74,16 +74,64 @@ if DEVICE.type == 'cuda':
     cuda.set_device(ARGS.gpus[0])
     cuda.manual_seed(ARGS.seed)
 
-class Main():
+
+def _make_model(opt):
+    "create model, criterion"
+    #if use pretrained model (load pretrained weight)
+    neuralnet = AssembleNet()
+
+    if opt.pretrained_model:
+        print("Loading pretrained model {} \n".format(opt.pretrained_model))
+        pretrained_state = torch.load(opt.pretrained_model, \
+                map_location=lambda storage, loc: storage, \
+                pickle_module=pickle)['modelstate']
+        neuralnet.load_state_dict(pretrained_state)
+
+    model_parameters = filter(lambda p: p.requires_grad, neuralnet.parameters())
+    n_params = sum([p.numel() for p in model_parameters])
+    print('number of params', n_params)
+
+    return neuralnet
+
+
+def _make_optimizer(opt, neuralnet, param_groups=None):
+    parameters = filter(lambda p: p.requires_grad, neuralnet.parameters())
+
+    if param_groups is not None:
+        lr = param_groups[0]['lr']
+        weight_decay = param_groups[0]['weight_decay']
+    else:
+        lr = opt.lr
+        weight_decay = opt.weight_decay
+
+    optimizer = getattr(optim, opt.optim_algor)(
+        parameters, lr=lr, weight_decay=weight_decay)
+
+    return optimizer
+
+
+def _make_data(opt, subset='train', shuffle=True):
+    #get data
+    split = data.get_dataset(opt.data_root, opt.dataset, subset=subset)
+
+    #dataloader
+    loader = DataLoader(dataset=split, \
+        num_workers=opt.nthreads, batch_size=opt.batch_size, shuffle=shuffle)
+
+    return loader
+
+
+class Main:
     """Wrap training and evaluating processes
     """
     def __init__(self, opt):
         self.opt = opt
         os.makedirs(self.opt.save_path, exist_ok=True)
 
-        self.neuralnet = self._make_model(opt)
-        self.optimizer = self._make_optimizer(opt, self.neuralnet)
-        self.train_loader, self.val_loader = self._make_data(opt)
+        self.neuralnet = _make_model(opt)
+        self.optimizer = _make_optimizer(opt, self.neuralnet)
+        self.train_loader = _make_data(opt)
+        self.val_loader = _make_data(opt, subset='val', shuffle=False)
 
         #loss function
         self.criterion = LossFunc(opt.loss_type)
@@ -93,54 +141,7 @@ class Main():
 
         #meter
         self.loss_meter = meter.AverageValueMeter()
-        self.score_meter = meter.AverageValueMeter()
-        # self.confusion_meter = meter.ConfusionMeter(opt.n_classes, normalized=True)
 
-    def _make_model(self, opt):
-        "create model, criterion"
-        #if use pretrained model (load pretrained weight)
-        neuralnet = AssembleNet()
-
-        if opt.pretrained_model:
-            print("Loading pretrained model {} \n".format(opt.pretrained_model))
-            pretrained_state = torch.load(opt.pretrained_model, \
-                    map_location=lambda storage, loc: storage, \
-                    pickle_module=pickle)['modelstate']
-            neuralnet.load_state_dict(pretrained_state)
-
-        model_parameters = filter(lambda p: p.requires_grad, neuralnet.parameters())
-        n_params = sum([p.numel() for p in model_parameters])
-        print('number of params', n_params)
-
-        return neuralnet
-
-    def _make_optimizer(self, opt, neuralnet, param_groups=None):
-        parameters = filter(lambda p: p.requires_grad, neuralnet.parameters())
-
-        if param_groups is not None:
-            lr = param_groups[0]['lr']
-            weight_decay = param_groups[0]['weight_decay']
-        else:
-            lr = opt.lr
-            weight_decay = opt.weight_decay
-
-        optimizer = getattr(optim, self.opt.optim_algor)(
-            parameters, lr=lr, weight_decay=weight_decay)
-
-        return optimizer
-
-    def _make_data(self, opt):
-        #get data
-        trainset = data.get_dataset(opt.data_root, opt.dataset, subset='train')
-        valset = data.get_dataset(opt.data_root, opt.dataset, subset='val')
-
-        #dataloader
-        train_loader = DataLoader(dataset=trainset, \
-            num_workers=opt.nthreads, batch_size=opt.batch_size, shuffle=True)
-        val_loader = DataLoader(dataset=valset, \
-            num_workers=opt.nthreads, batch_size=opt.val_batch_size, shuffle=False)
-
-        return train_loader, val_loader
 
     #===========================================================================
     # Training and Evaluating
@@ -148,13 +149,13 @@ class Main():
 
     def _resetmeter(self):
         self.loss_meter.reset()
-        self.score_meter.reset()
-        # self.confusion_meter.reset()
 
     def _evaluate(self, dataloader):
         gc.collect()
-        self.neuralnet.eval()
         self._resetmeter()
+
+        self.neuralnet.eval()
+        self.criterion.eval()
 
         for _, batch in enumerate(dataloader):
             with torch.no_grad():
@@ -171,14 +172,17 @@ class Main():
 
                 #log meter
                 self.loss_meter.add(loss.item())
-                # self.score_meter.add(jaccscore.item())
 
         self.neuralnet.train()
+        self.criterion.train()
+
         return self.loss_meter.value()[0]
 
     def _train(self, dataloader, epoch):
-        self.neuralnet.train()
         self._resetmeter()
+
+        self.neuralnet.train()
+        self.criterion.train()
 
         for iteration, batch in enumerate(dataloader, 1):
             start_time = time.time()
@@ -201,7 +205,6 @@ class Main():
 
             #log meter
             self.loss_meter.add(loss.item())
-            # self.score_meter.add(jaccscore.item())
 
             #print
             eslapsed = time.time() - start_time
@@ -228,7 +231,7 @@ class Main():
             self.neuralnet.load_state_dict(model_state)
 
             optim_state = checkpoint['optimstate']
-            self.optimizer = self._make_optimizer(
+            self.optimizer = _make_optimizer(
                 self.opt, self.neuralnet, param_groups=optim_state['param_groups'])
 
             start_epoch = checkpoint['epoch']+1
@@ -244,27 +247,19 @@ class Main():
 
         #visualization
         port = 8097
-        viz = Visdom()
+        viz = Visdom(port=port)
         visdom_saver = VisdomSaver([viz.env])
 
         loss_logger = VisdomPlotLogger('line', port=port, \
             opts={'title': 'Total Loss', 'legend': ['train', 'val']})
 
-        # losses_logger = VisdomPlotLogger('line', port=port, \
-        #     opts={'title': 'Losses', 'legend': \
-        #         ['train_reconst', 'train_percept', 'val_reconst', 'val_percept']})
-
-        print('Start training optim {}, on device {}'.format( \
-            self.opt.optim_algor, DEVICE.type))
+        print('Start training: optim {}, on device {}'.format( \
+            self.opt.optim_algor, DEVICE))
 
         lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer, T_max=1000, eta_min=5e-5)
 
         for epoch in range(start_epoch, self.opt.epochs+1):
-            #update learning rate
-            if self.opt.optim_algor != 'Adadelta':
-                lr_scheduler.step()
-
             #let's go
             print('\n')
             print('-' * 65)
@@ -285,6 +280,7 @@ class Main():
             print('| finish validating on epoch {:3d} | time(s) {:5.2f} | loss {:3.4f}'.format(
                 epoch, time.time() - start_time, val_loss))
 
+            #save check point
             if val_loss < best_result:
                 best_result = val_loss
                 best_flag = True
@@ -323,12 +319,13 @@ class Main():
 
             #visualize training and eval process
             loss_logger.log((epoch, epoch), (train_loss, val_loss))
-            # losses_logger.log((epoch, epoch, epoch, epoch), (train_reconst, train_percept, val_reconst, val_percept))
-
             visdom_saver.save()
 
+            #update learning rate
+            lr_scheduler.step()
+
         print('*' * 65)
-        print('Finish train and test on all epoch')
+        print('Finish train and test all epochs')
 
 
 #------------------------------------------------------------------------------
@@ -338,15 +335,16 @@ class Main():
 class Tester():
     """Testing trained model on test data.
     """
-    def test(self, neuralnet, dataloader, batch_transform):
+    @staticmethod
+    def test(neuralnet, dataloader):
         """
         Segment on random image from dataset
         Support 2D images only
         """
-
         neuralnet.eval()
-        idx = 0
+        batch_transform = data.BatchTransform()
 
+        idx = 0
         for iteration, batch in enumerate(dataloader):
             with torch.no_grad():
                 im = batch[0].requires_grad_(False).to(DEVICE)
@@ -357,39 +355,34 @@ class Tester():
 
                 future_im_pred, gauss_mu, _ = neuralnet(im, future_im)
 
-                predict = future_im_pred.detach().cpu().numpy().transpose(0, 2, 3, 1)
-                gauss_mu = gauss_mu.detach().cpu().numpy()
-                # gauss_map = gauss_map.detach().cpu().numpy()
-                # seg = seg.max(dim=1)[1].detach().cpu().numpy()
+                predict = future_im_pred.data.cpu().numpy().transpose(0, 2, 3, 1)
+                gauss_mu = gauss_mu.data.cpu().numpy()
+                # gauss_map = gauss_map.data.cpu().numpy()
+                future_im = future_im.data.cpu().numpy().transpose(0, 2, 3, 1)
 
                 os.makedirs('testcheck', exist_ok=True)
                 fig_path = path.join('testcheck', 'fig_{}.png'.format(iteration))
-                utils.savegrid(fig_path, future_im.cpu().numpy().transpose(0, 2, 3, 1), predict, gauss_mu=gauss_mu, name='deform')
+                utils.savegrid(fig_path, future_im, predict, gauss_mu=gauss_mu, name='deform')
 
                 idx += im.shape[0]
 
         neuralnet.train()
         return idx
 
-    def exe(self, opt):
+    @staticmethod
+    def exe(opt):
         #Load trained model
         print(opt, '\n')
         print('Load checkpoint at {}'.format(opt.trained_model))
 
-        neuralnet = AssembleNet()
-        checkpoint = torch.load(opt.trained_model, map_location=lambda storage, loc: storage, pickle_module=pickle)
+        neuralnet = _make_model(opt)
+        checkpoint = torch.load(opt.trained_model, \
+            map_location=lambda storage, loc: storage, pickle_module=pickle)
         model_state = checkpoint['modelstate']
         neuralnet.load_state_dict(model_state)
 
-        model_parameters = neuralnet.parameters() #filter(lambda p: p.requires_grad, neuralnet.parameters())
-        n_params = sum([p.numel() for p in model_parameters])
-        print('number of params', n_params)
-
         #Dataloader
-        testset = data.get_dataset(opt.testset, opt.dataset, subset='val')
-        test_loader = DataLoader(dataset=testset, num_workers=opt.nthreads, batch_size=opt.val_batch_size, shuffle=False)
-
-        batch_transform = data.BatchTransform()
+        test_loader = _make_data(opt, subset='val', shuffle=False)
 
         #DataParallel for multiple GPUs:
         if len(opt.gpus) > 1:
@@ -399,14 +392,13 @@ class Tester():
 
         print('Start testing on device {}'.format(DEVICE.type))
         start_time = time.time()
-        total_sample = self.test(neuralnet, test_loader, batch_transform)
-        print('| finish testing on {} samples in {} seconds'.format(total_sample, time.time() - start_time))
-
+        total_sample = Tester.test(neuralnet, test_loader)
+        print('| finish testing on {} samples in {} seconds'.format(
+            total_sample, time.time() - start_time))
 
 if __name__ == "__main__":
     if ARGS.trained_model:
-        tester = Tester()
-        tester.exe(ARGS)
+        Tester.exe(ARGS)
     else:
         main = Main(ARGS)
         main.exe()

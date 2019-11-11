@@ -12,8 +12,8 @@ import random
 class TPSRandomSampler(nn.Module):
 
     def __init__(self, height, width, vertical_points=10, horizontal_points=10,
-                 rotsd=0.0, scalesd=0.0, transsd=0.1, warpsd=(0.001, 0.005),
-                 cache_size=1000, cache_evict_prob=0.01, pad=True):
+                rotsd=0.0, scalesd=0.0, transsd=0.1, warpsd=(0.001, 0.005),
+                cache_size=1000, cache_evict_prob=0.01, pad=True):
         super(TPSRandomSampler, self).__init__()
 
         self.input_height = height

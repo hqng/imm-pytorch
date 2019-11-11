@@ -13,7 +13,7 @@ from torch.nn import functional as F
 def _init_weight(modules):
     for m in modules:
         if isinstance(m, (nn.Conv2d, nn.Conv3d)):
-            init.xavier_uniform_(m.weight)
+            init.kaiming_normal_(m.weight)
             if m.bias is not None:
                 init.constant_(m.bias, 0)
 
@@ -202,7 +202,7 @@ class Renderer(nn.Module):
 
     def forward(self, x):
         x = self.seq_renderers(x)
-        x = F.sigmoid(x)
+        x = torch.sigmoid(x)
         return x
 
 class AssembleNet(nn.Module):
@@ -240,5 +240,3 @@ class AssembleNet(nn.Module):
         future_im_pred = self.renderer(joint_embedding)
 
         return future_im_pred, gauss_pt, pose_embeddings[-1]
-
-

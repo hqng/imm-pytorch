@@ -18,10 +18,6 @@ class LossFunc(nn.Module):
         loss = self._loss(future_im_pred, future_im, mask=mask)
         return loss
 
-    def _loss_mask(self, imap, mask):
-        mask = F.interpolate(mask, imap.shape[-2:])
-        return imap * mask
-
     def _loss(self, future_im_pred, future_im, mask=None):
         "loss function"
         vgg_losses = []
@@ -43,11 +39,15 @@ class LossFunc(nn.Module):
 
         return loss, vgg_losses
 
-    def _colorization_reconstruction_loss(self, \
-        gt_image, pred_image, mask=None, \
+    def _loss_mask(self, imap, mask):
+        mask = F.interpolate(mask, imap.shape[-2:])
+        return imap * mask
+
+    def _colorization_reconstruction_loss(
+        self, gt_image, pred_image, mask=None, \
         names=['input', 'conv1_2', 'conv2_2', 'conv3_2', 'conv4_2', 'conv5_2']):
         #init weight
-        ws = [100.0, 1.6, 2.3, 1.8, 2.8, 100.0]
+        ws = [50., 40., 6., 3., 3., 1.]
 
         #get features map from vgg
         feats_gt = self.vggnet(gt_image)
@@ -74,6 +74,8 @@ class LossFunc(nn.Module):
 
     def _exp_running_avg(self, x, init_val=0., name='x'):
         with torch.no_grad():
+            if not self.training:
+                return init_val
             x_new = self.ema.update(name, x, init_val)
             return x_new
 
