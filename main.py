@@ -203,6 +203,12 @@ class Main:
             loss.backward()
             self.optimizer.step()
 
+            #update weight of perceptual loss by EMA
+            for k, new_val in enumerate(loss_values):
+                tmp_name = list(self.criterion.ema.avgs)[k]
+                tmp_init_val = self.criterion.ema.avgs[tmp_name]
+                self.criterion.ema.update(tmp_name, new_val, init_val=tmp_init_val)
+
             #log meter
             self.loss_meter.add(loss.item())
 

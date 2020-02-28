@@ -13,6 +13,7 @@ class LossFunc(nn.Module):
         self.loss_type = loss_type
         self.ema = EMA()
         self.vggnet = Vgg16() if loss_type == 'perceptual' else None
+        self._init_ema()
 
     def forward(self, future_im_pred, future_im, mask=None):
         loss = self._loss(future_im_pred, future_im, mask=mask)
@@ -44,10 +45,9 @@ class LossFunc(nn.Module):
         return imap * mask
 
     def _colorization_reconstruction_loss(
-        self, gt_image, pred_image, mask=None, \
-        names=['input', 'conv1_2', 'conv2_2', 'conv3_2', 'conv4_2', 'conv5_2']):
-        #init weight
-        ws = [50., 40., 6., 3., 3., 1.]
+        self, gt_image, pred_image, mask=None):
+        "perceptual loss"
+        names = list(self.ema.avgs)
 
         #get features map from vgg
         feats_gt = self.vggnet(gt_image)
@@ -59,25 +59,33 @@ class LossFunc(nn.Module):
             feat_pred.append(getattr(feats_pred, k))
 
         losses = []
-        for k, _ in enumerate(names):
+        for k, v in enumerate(names):
             l = F.mse_loss(feat_pred[k], feat_gt[k], reduction='none')
             if mask is not None:
                 l = self._loss_mask(l, mask)
-            wl = self._exp_running_avg(
-                torch.mean(l).item(), init_val=ws[k], name=names[k])
-            l /= wl
+            #update EMA
+            # wl = self.exp_moving_avg(
+                # torch.mean(l).item(), name=v, init_val=self.ema[v])
+            l /= self.ema[v]
             l = torch.mean(l)
             losses.append(l)
         vgg_losses = [x.item() for x in losses] #for display
         loss = torch.stack(losses).sum()
         return loss, vgg_losses
 
-    def _exp_running_avg(self, x, init_val=0., name='x'):
-        with torch.no_grad():
-            if not self.training:
-                return init_val
-            x_new = self.ema.update(name, x, init_val)
-            return x_new
+    # def exp_moving_avg(self, x, name='x', init_val=0.):
+    #     "exponential moving average"
+    #     with torch.no_grad():
+    #         if not self.training:
+    #             return init_val
+    #         x_new = self.ema.update(name, x, init_val)
+    #         return x_new
+    
+    def _init_ema(self, ws=[50., 40., 6., 3., 3., 1.], 
+        names=['input', 'conv1_2', 'conv2_2', 'conv3_2', 'conv4_2', 'conv5_2']):
+        "init weight for perceptual loss/EMA"
+        for k, v in range(names):
+            self.ema.update(v, ws[k], 0.)
 
 
 class EMA(object):
